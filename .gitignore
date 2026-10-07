@@ -1,0 +1,10 @@
+node_modules/
+*.tgz
+.bg-shell/
+.pi/
+plans/
+coverage/
+.env
+.env.*
+!.env.example
+.DS_Store

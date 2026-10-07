@@ -1,0 +1,51 @@
+{
+	"name": "pi-openai-decisions",
+	"version": "0.1.0",
+	"private": true,
+	"description": "OpenAI Decisions as a native Pi classifier for codemode.",
+	"type": "module",
+	"license": "MIT",
+	"author": "Ryan Scott",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/ryan-scott-dev/pi-openai-decisions.git"
+	},
+	"keywords": [
+		"pi-package",
+		"openai",
+		"classifier",
+		"decisions"
+	],
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"files": [
+		"src/",
+		"README.md",
+		"AGENTS.md",
+		"LICENSE"
+	],
+	"pi": {
+		"extensions": [
+			"./src/index.ts"
+		]
+	},
+	"scripts": {
+		"test": "node --experimental-strip-types --test test/*.test.ts",
+		"typecheck": "tsc --noEmit",
+		"check": "biome check .",
+		"format": "biome format --write .",
+		"smoke": "node --experimental-strip-types scripts/smoke.ts"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-ai": "*",
+		"@earendil-works/pi-coding-agent": "*"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.15",
+		"@earendil-works/pi-ai": "1.0.2",
+		"@earendil-works/pi-coding-agent": "1.0.2",
+		"@types/node": "22.19.15",
+		"typescript": "7.0.2"
+	}
+}
