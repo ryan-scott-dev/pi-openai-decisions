@@ -1,5 +1,6 @@
 import { createProvider, envApiKeyAuth } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
 import { classify, DECISIONS_MODEL } from "./classifier.ts";
 
 export default function openaiDecisions(pi: ExtensionAPI) {

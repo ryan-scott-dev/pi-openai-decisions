@@ -27,22 +27,31 @@ export const DECISIONS_MODEL: ClassifierModel<"openai-decisions"> = {
 	},
 };
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type -- This parser accepts untrusted JSON; each returned field is validated before use.
 function record(value: unknown): Record<string, unknown> {
+	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- Reject non-object wire values before accessing fields.
 	if (typeof value !== "object" || value === null || Array.isArray(value)) {
 		throw new Error("OpenAI Decisions returned an invalid object");
 	}
+
+	// SAFETY: The guard above rejects null, arrays, and non-objects; field values remain untrusted.
+	// oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- This container is internal to wire-response parsing, not a domain contract.
 	return value as Record<string, unknown>;
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Numeric wire fields must be checked before they enter typed answers or usage.
 function number(value: unknown, field: string, max = Infinity): number {
+	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- This is the numeric parser, including finite/range validation.
 	if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > max) {
 		throw new Error(`OpenAI Decisions returned an invalid ${field}`);
 	}
+
 	return value;
 }
 
 function wireQuestion(name: string, question: ClassifierQuestion) {
 	const { instructions } = question;
+
 	switch (question.type) {
 		case "bool":
 			return {
@@ -55,43 +64,59 @@ function wireQuestion(name: string, question: ClassifierQuestion) {
 				value,
 				description,
 			}));
+
 			if (choices.length < 2) throw new Error(`Choice question ${name} needs at least two options`);
+
 			return { name, type: "choice", instructions, choices };
 		}
+
 		case "score":
 			if (question.criteria.length < 2) throw new Error(`Score question ${name} needs at least two levels`);
+
 			return { name, type: "score", instructions, levels: question.criteria.map((label) => ({ label })) };
 	}
 }
 
+// oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- Wire fields stay untrusted until this parser validates their type and range.
 function parseAnswer(raw: Record<string, unknown>, question: ClassifierQuestion): ClassifierAnswer {
 	if (raw.type === "refusal") throw new Error("OpenAI Decisions refused a question");
+
 	switch (question.type) {
 		case "bool":
 			if (raw.type !== "predicate") throw new Error("Expected a predicate answer");
+
 			return { type: "bool", probability: number(raw.probability, "probability", 1) };
 		case "choice": {
 			if (
 				raw.type !== "choice" ||
+				// oxlint-disable-next-line anti-slop/no-runtime-typeof -- A choice must be a string and an own key of the caller's allowed choices.
 				typeof raw.choice !== "string" ||
 				!Object.hasOwn(question.criteria, raw.choice)
 			) {
 				throw new Error("OpenAI Decisions returned an invalid choice");
 			}
+
 			if (!Array.isArray(raw.probabilities)) throw new Error("Expected choice probabilities");
+
+			// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Each wire-array item is parsed before typed probabilities are constructed.
 			const entries = raw.probabilities.map((item: unknown): [string, number] => {
 				const probability = record(item);
+
+				// oxlint-disable-next-line anti-slop/no-runtime-typeof -- Reject a wire option without a string label before checking allowed keys.
 				if (typeof probability.value !== "string" || !Object.hasOwn(question.criteria, probability.value)) {
 					throw new Error("OpenAI Decisions returned an unknown choice probability");
 				}
+
 				return [probability.value, number(probability.probability, "choice probability", 1)];
 			});
+
 			if (
 				entries.length !== Object.keys(question.criteria).length ||
 				new Set(entries.map(([key]) => key)).size !== entries.length
 			) {
 				throw new Error("OpenAI Decisions returned incomplete or duplicate choice probabilities");
 			}
+
 			return {
 				type: "choice",
 				choice: raw.choice,
@@ -99,8 +124,10 @@ function parseAnswer(raw: Record<string, unknown>, question: ClassifierQuestion)
 				confidence: number(raw.confidence, "confidence", 1),
 			};
 		}
+
 		case "score":
 			if (raw.type !== "score") throw new Error("Expected a score answer");
+
 			return {
 				type: "score",
 				score: number(raw.score, "score", question.criteria.length - 1),
@@ -109,6 +136,7 @@ function parseAnswer(raw: Record<string, unknown>, question: ClassifierQuestion)
 	}
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Usage is an untrusted wire object; all token counts are validated here.
 function parseUsage(value: unknown, model: ClassifierModel<string>): Usage {
 	const raw = record(value);
 	const totalInput = number(raw.input_tokens, "input tokens");
@@ -117,12 +145,14 @@ function parseUsage(value: unknown, model: ClassifierModel<string>): Usage {
 	const cacheRead = number(details.cached_tokens, "cached tokens", totalInput);
 	const cacheWrite = number(details.cache_write_tokens, "cache-write tokens", totalInput - cacheRead);
 	const totalTokens = number(raw.total_tokens, "total tokens");
+
 	if (
 		![totalInput, output, cacheRead, cacheWrite, totalTokens].every(Number.isSafeInteger) ||
 		totalTokens !== totalInput + output
 	) {
 		throw new Error("OpenAI Decisions returned inconsistent token usage");
 	}
+
 	const usage: Usage = {
 		input: totalInput - cacheRead - cacheWrite,
 		output,
@@ -131,7 +161,9 @@ function parseUsage(value: unknown, model: ClassifierModel<string>): Usage {
 		totalTokens,
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	};
+
 	calculateCost(model, usage);
+
 	return usage;
 }
 
@@ -148,73 +180,94 @@ export async function classify(
 		stopReason: "stop",
 		timestamp: Date.now(),
 	};
+
 	try {
 		options.signal?.throwIfAborted();
+
 		if (!options.apiKey) throw new Error(`No API key for provider: ${model.provider}`);
 		const questions = Object.entries(context.questions);
+
 		if (questions.length === 0) throw new Error("At least one classifier question is required");
-		let payload: unknown = {
+
+		const payload = {
 			model: model.id,
 			input: JSON.stringify(context.state),
 			questions: questions.map(([name, question]) => wireQuestion(name, question)),
 		};
+
 		const transformed = await options.onPayload?.(payload, model);
-		if (transformed !== undefined) payload = transformed;
+
 		const headers = new Headers({
 			authorization: `Bearer ${options.apiKey}`,
 			"content-type": "application/json",
 		});
+
 		for (const source of [model.headers, options.headers]) {
 			for (const [name, value] of Object.entries(source ?? {})) {
 				if (value === null) headers.delete(name);
 				else headers.set(name, value);
 			}
 		}
+
 		const timeout = AbortSignal.timeout(options.timeoutMs ?? 60000);
 		const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+
 		const response = await (options.fetch ?? globalThis.fetch)(
 			`${model.baseUrl.replace(/\/+$/, "")}/decisions`,
 			{
 				method: "POST",
 				headers,
-				body: JSON.stringify(payload),
+				body: JSON.stringify(transformed === undefined ? payload : transformed),
 				signal,
 				redirect: "error",
 			},
 		);
+
 		await options.onResponse?.(
 			{ status: response.status, headers: Object.fromEntries(response.headers) },
 			model,
 		);
+
 		if (!response.ok) {
 			await response.body?.cancel();
 			// Upstream error bodies may echo input or credentials. Report only the HTTP status.
 			throw new Error(`OpenAI Decisions returned HTTP ${response.status}`);
 		}
+
 		let decoded: unknown;
+
 		try {
 			decoded = await response.json();
 		} catch (error) {
+			// oxlint-disable-next-line eslint/preserve-caught-error -- Parser errors can contain private response excerpts; the sanitized error must not retain them as a cause.
 			if (error instanceof SyntaxError) throw new Error("OpenAI Decisions returned invalid JSON");
 			throw error;
 		}
+
 		const body = record(decoded);
 		// Even refused or malformed answers can be billed.
 		result.usage = parseUsage(body.usage, model);
+
 		if (!Array.isArray(body.answers) || body.answers.length !== questions.length)
 			throw new Error("OpenAI Decisions returned an unexpected answer count");
+		// oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- This temporary map holds wire objects only until every answer passes parseAnswer.
 		const byName = new Map<string, Record<string, unknown>>();
+
 		for (const item of body.answers) {
 			const answer = record(item);
+
 			if (
+				// oxlint-disable-next-line anti-slop/no-runtime-typeof -- Question names must be strings before matching caller-supplied own keys.
 				typeof answer.name !== "string" ||
 				!Object.hasOwn(context.questions, answer.name) ||
 				byName.has(answer.name)
 			) {
 				throw new Error("OpenAI Decisions returned an unknown or duplicate question name");
 			}
+
 			byName.set(answer.name, answer);
 		}
+
 		result.answers = Object.fromEntries(
 			questions.map(([name, question]) => [name, parseAnswer(record(byName.get(name)), question)]),
 		);
@@ -223,5 +276,6 @@ export async function classify(
 		const message = error instanceof Error ? error.message : "OpenAI Decisions request failed";
 		result.errorMessage = options.apiKey ? message.replaceAll(options.apiKey, "[redacted]") : message;
 	}
+
 	return result;
 }

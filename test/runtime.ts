@@ -3,10 +3,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))));
+
 export const extensionPath = fileURLToPath(new URL("../src/index.ts", import.meta.url));
+
 const script = `
 const model = await models.getModelOfType("classifier", "openai-decisions", "gpt-6-luna");
 if (!model) throw new Error("Classifier was not registered");
@@ -30,10 +33,12 @@ export async function runCodemode(modelsPath: string, sourcePath = extensionPath
 	const loader = await import(pathToFileURL(join(packageRoot, "dist/core/extensions/loader.js")).href);
 	const codemode = await import(pathToFileURL(join(packageRoot, "dist/extensions/codemode/execute.js")).href);
 	const temp = await mkdtemp(join(tmpdir(), "pi-decisions-runtime-"));
+
 	try {
 		const loaded = await loader.loadExtensions([sourcePath], dirname(sourcePath));
 		assert.deepEqual(loaded.errors, []);
 		assert.equal(loaded.runtime.pendingNativeProviderRegistrations.length, 1);
+
 		const models = await ModelRuntime.create({
 			modelsPath,
 			authPath: join(temp, "auth.json"),
@@ -41,13 +46,16 @@ export async function runCodemode(modelsPath: string, sourcePath = extensionPath
 			refreshOnCreate: false,
 			allowModelNetwork: false,
 		});
+
 		const registry = new ModelRegistry(models);
+
 		for (const { provider } of loaded.runtime.pendingNativeProviderRegistrations)
 			registry.registerProvider(provider);
 		assert.equal(
 			registry.getAll().some((model) => model.provider === "openai-decisions"),
 			false,
 		);
+
 		return await codemode.executeCodemode(
 			"decisions-smoke",
 			{ code: script },
@@ -70,6 +78,7 @@ export function checkResult(result: {
 		.filter((item) => item.type === "text")
 		.map((item) => item.text)
 		.join("\n");
+
 	assert.equal(result.isError, undefined, text);
 	assert.match(text, /Script completed/);
 	assert.match(text, /"damaged"/);
@@ -77,5 +86,6 @@ export function checkResult(result: {
 	assert.match(text, /"severity"/);
 	assert.ok(result.usage && result.usage.totalTokens > 0);
 	assert.ok(result.usage.cost.total > 0);
+
 	return text;
 }

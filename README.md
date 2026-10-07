@@ -55,12 +55,12 @@ providers:
 
 ```json
 {
-  "providers": {
-    "openai-decisions": {
-      "baseUrl": "https://your-proxy.example/openai/v1",
-      "apiKey": "$PROXY_API_KEY"
-    }
-  }
+	"providers": {
+		"openai-decisions": {
+			"baseUrl": "https://your-proxy.example/openai/v1",
+			"apiKey": "$PROXY_API_KEY"
+		}
+	}
 }
 ```
 
@@ -84,7 +84,7 @@ Merge this into `~/.pi/agent/settings.json` if codemode is not already enabled:
 
 ```json
 {
-  "defaultTools": ["+codemode"]
+	"defaultTools": ["+codemode"]
 }
 ```
 
@@ -102,24 +102,24 @@ const model = await models.getModelOfType("classifier", "openai-decisions", "gpt
 if (!model) throw new Error("Install or reload the OpenAI Decisions extension first");
 
 const result = await models.classify(model, {
-  state: { message: "The package arrived with a broken screen." },
-  questions: {
-    damaged: {
-      type: "bool",
-      instructions: "Does the message report a damaged item?",
-      criteria: { true: "Reports damage", false: "Does not report damage" }
-    },
-    department: {
-      type: "choice",
-      instructions: "Which department should handle the complaint?",
-      criteria: { returns: "Damaged items and returns", billing: "Charges and invoices" }
-    },
-    severity: {
-      type: "score",
-      instructions: "How severe is the issue?",
-      criteria: ["No damage", "Minor cosmetic damage", "Product is broken"]
-    }
-  }
+	state: { message: "The package arrived with a broken screen." },
+	questions: {
+		damaged: {
+			type: "bool",
+			instructions: "Does the message report a damaged item?",
+			criteria: { true: "Reports damage", false: "Does not report damage" },
+		},
+		department: {
+			type: "choice",
+			instructions: "Which department should handle the complaint?",
+			criteria: { returns: "Damaged items and returns", billing: "Charges and invoices" },
+		},
+		severity: {
+			type: "score",
+			instructions: "How severe is the issue?",
+			criteria: ["No damage", "Minor cosmetic damage", "Product is broken"],
+		},
+	},
 });
 if (result.stopReason !== "stop") throw new Error(result.errorMessage);
 return result.answers;
@@ -167,33 +167,70 @@ credentials or the provider entry in `models.json`; remove those separately if n
 
 ## Development
 
+Use [pnpm](https://pnpm.io/installation) 10.33.1, pinned in `packageManager`, with
+Node >=22.19.0. Commit the generated `pnpm-lock.yaml`; do not create an npm lockfile.
+
 ```sh
-npm ci
-npm test
-npm run typecheck
-npm run check
+pnpm install --frozen-lockfile
+pnpm check
+pnpm typecheck
+pnpm test
 ```
 
-`npm test` runs offline unit tests and native Pi loader/registry/codemode integration
-against a local synthetic HTTP fixture. It does not need API credentials. The integration
-helper resolves the installed development dependency, so no absolute runtime path or
-optional environment variable is required. Development Pi dependencies are pinned to
-1.0.2; managed installs use the host Pi packages through peer dependencies.
+`pnpm test` runs offline adapter tests, native Pi loader/registry/codemode integration
+against a local synthetic HTTP fixture, and regressions proving the lint plugin is
+actually loaded and rejects violations. No API credentials are needed. The integration
+helper resolves the installed development dependency without absolute runtime paths.
+Development Pi dependencies are pinned to 1.0.2; a pnpm override keeps transitive
+`pi-ai` consumers on that same version. Managed installs still use host Pi modules
+through peer dependencies, not bundled copies.
 
-Use `npm run format` to format files, then rerun the checks. CI runs check, typecheck,
-and tests on Node 22 and 24. No build step is required: Pi loads TypeScript extensions.
-The package is Git-distributed; `private: true` prevents accidental npm publishing.
+CI uses a frozen pnpm install and runs check, typecheck, and tests on Node 22 and 24.
+No build step is required: Pi loads TypeScript extensions. The package is
+Git-distributed; `private: true` prevents accidental npm publishing.
+
+### Linting and formatting
+
+`pnpm lint` runs **Oxlint** with correctness/suspicious checks and all 18 generic
+[anti-slop](https://github.com/dmmulroy/anti-slop) rules as errors, plus
+`oxc/no-accumulating-spread`. Warnings also fail the check. Oxlint and `@oxlint/plugins`
+are pinned together at 1.87.0. Optional Effect rules are not enabled.
+
+Anti-slop has no official npm release. Its generic production source is vendored at
+an explicit upstream revision, with license notices and [provenance](tools/oxlint/anti-slop/PROVENANCE.md).
+The copy is developer tooling only, excluded from application lint/format checks and
+the distributable package allowlist. Updates require reviewing upstream changes.
+
+Narrow, explained inline exceptions preserve validation of untrusted JSON and malformed
+HTTP fixtures. They do not disable rules for whole application files. The sanitized
+JSON error also intentionally drops its original cause to avoid retaining private
+response excerpts. Necessary type assertions state their checked invariant in a
+`SAFETY:` comment; do not remove validation just to satisfy a lint rule.
+
+`pnpm format` uses **Oxfmt**, the Oxc formatter, with tabs, a 110-column width, and import
+sorting. `pnpm format:check` checks formatting without writing files; `pnpm check`
+combines lint and format checking. Generated lockfiles and pinned vendor source are
+not reformatted. To apply the readable-spacing rule's safe fixes, run:
+
+```sh
+pnpm exec oxlint --fix .
+pnpm format
+pnpm check
+```
+
+Review fixes before committing. Do not automatically rewrite non-fixable rules or
+silently add broad suppressions.
 
 ### Optional live smoke test
 
 This sends synthetic data, makes a billable request, and prints answers/usage. It is
-never run by `npm test` or CI:
+never run by `pnpm test` or CI:
 
 ```sh
 export OPENAI_DECISIONS_API_KEY="your-api-or-proxy-key"
 # Optional proxy API root; otherwise uses https://api.openai.com/v1:
 export OPENAI_DECISIONS_BASE_URL="https://your-proxy.example/openai/v1"
-npm run smoke
+pnpm smoke
 ```
 
 The smoke test does not fall back to unrelated provider credentials. Temporary config

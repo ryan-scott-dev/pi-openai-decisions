@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+
 import type { ClassifierContext, ClassifierModel, ClassifierOptions } from "@earendil-works/pi-ai";
+
 import { classify, DECISIONS_MODEL } from "../src/classifier.ts";
 
 const model: ClassifierModel<string> = { ...DECISIONS_MODEL, baseUrl: "https://proxy.example/openai/v1/" };
+
 const context: ClassifierContext = {
 	state: { message: "The screen is broken", nested: { priority: 2 } },
 	questions: {
@@ -20,7 +23,9 @@ const context: ClassifierContext = {
 		severity: { type: "score", instructions: "How severe?", criteria: ["No damage", "Cosmetic", "Broken"] },
 	},
 };
+
 function responseBody() {
+	// SAFETY: These synthetic wire fixtures deliberately allow corrupt field values; the adapter must reject them.
 	return {
 		model: "gpt-6-luna",
 		answers: [
@@ -36,6 +41,7 @@ function responseBody() {
 				],
 			},
 			{ type: "score", name: "severity", score: 1.8, confidence: 0.85 },
+			// oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- Malformed wire fixtures must remain expressible for negative validation tests.
 		] as Array<Record<string, unknown>>,
 		usage: {
 			input_tokens: 100,
@@ -45,6 +51,8 @@ function responseBody() {
 		},
 	};
 }
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- This mock HTTP response accepts malformed JSON values to exercise the adapter's boundary validation.
 function options(body: unknown = responseBody(), extra: Partial<ClassifierOptions> = {}): ClassifierOptions {
 	return { apiKey: "secret-test-key", fetch: async () => Response.json(body), ...extra };
 }
@@ -53,6 +61,7 @@ test("sends one Decisions request with all question types and resolves answers b
 	const body = responseBody();
 	body.answers.reverse();
 	let calls = 0;
+
 	const result = await classify(
 		model,
 		context,
@@ -64,6 +73,7 @@ test("sends one Decisions request with all question types and resolves answers b
 				assert.equal(init?.redirect, "error");
 				assert.equal(new Headers(init?.headers).get("authorization"), "Bearer secret-test-key");
 				assert.ok(init?.signal);
+				// SAFETY: The adapter serializes its request body with JSON.stringify before invoking this injected fetch.
 				assert.deepEqual(JSON.parse(init?.body as string), {
 					model: "gpt-6-luna",
 					input: JSON.stringify(context.state),
@@ -90,10 +100,12 @@ test("sends one Decisions request with all question types and resolves answers b
 						},
 					],
 				});
+
 				return Response.json(body);
 			},
 		}),
 	);
+
 	assert.equal(calls, 1);
 	assert.equal(result.stopReason, "stop");
 	assert.deepEqual(result.answers, {
@@ -130,12 +142,16 @@ test("prices input with zero output/cache charges and honors the long-context ti
 
 test("honors payload/response hooks and case-insensitive header overrides/removals", async () => {
 	let seenResponse = false;
+
 	const result = await classify(
 		{ ...model, headers: { "X-Test": "model", "X-Remove": "remove" } },
 		context,
 		options(undefined, {
 			headers: { "x-test": "caller", "x-remove": null },
-			onPayload: (payload) => ({ ...(payload as object), safety_identifier: "test-user" }),
+			onPayload: (payload) => {
+				// SAFETY: This fixture's payload hook receives the object literal constructed by the adapter before serialization.
+				return { ...(payload as object), safety_identifier: "test-user" };
+			},
 			onResponse: (response) => {
 				assert.equal(response.status, 200);
 				seenResponse = true;
@@ -143,11 +159,14 @@ test("honors payload/response hooks and case-insensitive header overrides/remova
 			fetch: async (_url, init) => {
 				assert.equal(new Headers(init?.headers).get("x-test"), "caller");
 				assert.equal(new Headers(init?.headers).has("x-remove"), false);
+				// SAFETY: The adapter's JSON.stringify call supplies a string body to this injected fetch.
 				assert.equal(JSON.parse(init?.body as string).safety_identifier, "test-user");
+
 				return Response.json(responseBody());
 			},
 		}),
 	);
+
 	assert.equal(result.stopReason, "stop");
 	assert.equal(seenResponse, true);
 });
@@ -188,6 +207,7 @@ test("fails closed on refusals or malformed answers while keeping billed usage",
 			body.answers[2].confidence = -1;
 		},
 	];
+
 	for (const mutate of mutations) {
 		const body = responseBody();
 		mutate(body);
@@ -202,6 +222,7 @@ test("rejects invalid usage and invalid JSON without inventing answers", async (
 	const body = responseBody();
 	body.usage.total_tokens = 101;
 	assert.equal((await classify(model, context, options(body))).stopReason, "error");
+
 	for (const text of [
 		"not json",
 		"private-synthetic-record: not JSON",
@@ -215,6 +236,7 @@ test("rejects invalid usage and invalid JSON without inventing answers", async (
 				fetch: async () => new Response(text),
 			}),
 		);
+
 		assert.equal(result.stopReason, "error");
 		assert.deepEqual(result.answers, {});
 		assert.equal(result.errorMessage, "OpenAI Decisions returned invalid JSON");
@@ -223,6 +245,7 @@ test("rejects invalid usage and invalid JSON without inventing answers", async (
 
 test("reports HTTP status without echoing sensitive upstream bodies and does not retry", async () => {
 	let calls = 0;
+
 	const result = await classify(
 		model,
 		context,
@@ -230,13 +253,16 @@ test("reports HTTP status without echoing sensitive upstream bodies and does not
 			maxRetries: 3,
 			fetch: async () => {
 				calls++;
+
 				return new Response("secret-test-key private input", { status: 403 });
 			},
 		}),
 	);
+
 	assert.equal(calls, 1);
 	assert.equal(result.stopReason, "error");
 	assert.equal(result.errorMessage, "OpenAI Decisions returned HTTP 403");
+
 	const error = await classify(
 		model,
 		context,
@@ -246,29 +272,38 @@ test("reports HTTP status without echoing sensitive upstream bodies and does not
 			},
 		}),
 	);
+
 	assert.equal(error.errorMessage, "network failed [redacted]");
 });
 
 test("does not send requests with missing credentials, no questions, or underspecified questions", async () => {
 	let calls = 0;
+
 	const opts = options(undefined, {
 		fetch: async () => {
 			calls++;
+
 			return Response.json(responseBody());
 		},
 	});
+
 	assert.equal((await classify(model, context, { ...opts, apiKey: undefined })).stopReason, "error");
-	for (const questions of [
+
+	const cases: ClassifierContext["questions"][] = [
 		{},
 		{ q: { type: "choice", instructions: "Pick", criteria: { only: "Only" } } },
 		{ q: { type: "score", instructions: "Rate", criteria: ["Only"] } },
-	] as ClassifierContext["questions"][]) {
+	];
+
+	for (const questions of cases) {
 		assert.equal((await classify(model, { state: {}, questions }, opts)).stopReason, "error");
 	}
+
 	assert.equal(calls, 0);
 });
 
 test("handles prototype-like IDs and choices as ordinary own keys", async () => {
+	// SAFETY: The entries define one complete choice question; fromEntries preserves __proto__ as an own key.
 	const questions = Object.fromEntries([
 		[
 			"__proto__",
@@ -282,6 +317,7 @@ test("handles prototype-like IDs and choices as ordinary own keys", async () => 
 			},
 		],
 	]) as ClassifierContext["questions"];
+
 	const body = {
 		...responseBody(),
 		answers: [
@@ -297,6 +333,7 @@ test("handles prototype-like IDs and choices as ordinary own keys", async () => 
 			},
 		],
 	};
+
 	const result = await classify(model, { state: {}, questions }, options(body));
 	assert.equal(result.stopReason, "stop");
 	assert.equal(Object.hasOwn(result.answers, "__proto__"), true);
@@ -305,6 +342,7 @@ test("handles prototype-like IDs and choices as ordinary own keys", async () => 
 test("returns aborted without fetching when already cancelled", async () => {
 	const controller = new AbortController();
 	controller.abort();
+
 	const result = await classify(
 		model,
 		context,
@@ -315,31 +353,37 @@ test("returns aborted without fetching when already cancelled", async () => {
 			},
 		}),
 	);
+
 	assert.equal(result.stopReason, "aborted");
 });
 
 test("propagates in-flight cancellation and distinguishes timeout errors", { timeout: 1000 }, async () => {
 	const controller = new AbortController();
 	const fetchStarted = Promise.withResolvers<void>();
+
 	const waitForAbort: NonNullable<ClassifierOptions["fetch"]> = async (_url, init) => {
 		const signal = init?.signal;
 		assert.ok(signal);
 		signal.throwIfAborted();
+
 		return new Promise((_resolve, reject) => {
 			signal.addEventListener("abort", () => reject(signal.reason), { once: true });
 			fetchStarted.resolve();
 		});
 	};
+
 	const pending = classify(
 		model,
 		context,
 		options(undefined, { signal: controller.signal, fetch: waitForAbort }),
 	);
+
 	await fetchStarted.promise;
 	controller.abort();
 	assert.equal((await pending).stopReason, "aborted");
 	// Keep the event loop alive while AbortSignal.timeout's unref'ed timer runs.
 	const keepAlive = setTimeout(() => {}, 1000);
+
 	try {
 		const result = await classify(model, context, options(undefined, { timeoutMs: 5, fetch: waitForAbort }));
 		assert.equal(result.stopReason, "error");
